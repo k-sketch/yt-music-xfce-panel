@@ -1,0 +1,9 @@
+[Xfce Panel]
+Type=X-XFCE-PanelPlugin
+Encoding=UTF-8
+Name=YT Music
+Comment=Busca y reproduce música de YouTube Music
+Icon=multimedia-audio-player
+X-XFCE-Module=ytmplugin
+X-XFCE-Internal=false
+X-XFCE-API=2.0
