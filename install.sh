@@ -16,33 +16,22 @@ if [[ "${1:-}" == "--keep" ]]; then KEEP=1; fi
 APP_DIR="$HOME/.local/share/ytm-panel"  # donde queda instalado el popup
 DESKTOP_DIR="/usr/share/xfce4/panel/plugins"
 
-# --- Teclas multimedia ------------------------------------------------------
-# Cada tecla se conecta a una orden que le "habla" a YT Music por D-Bus.
-# Si YT Music no está abierto, la orden no hace nada (no molesta a otros
-# reproductores).
-KEYS_CHANNEL="xfce4-keyboard-shortcuts"
-MPRIS_CALL="dbus-send --session --type=method_call --dest=org.mpris.MediaPlayer2.ytmpanel /org/mpris/MediaPlayer2 org.mpris.MediaPlayer2.Player"
-
-bind_key() {            # uso: bind_key TECLA MÉTODO [ARGUMENTO]
-  local key="$1" method="$2" arg="${3:-}"
-  local prop="/commands/custom/$key"
-  local cmd="$MPRIS_CALL.$method${arg:+ $arg}"
-  local current
-
-  if current="$(xfconf-query -c "$KEYS_CHANNEL" -p "$prop" 2>/dev/null)"; then
-    if [[ "$current" != *org.mpris.MediaPlayer2.ytmpanel* ]]; then
-      # La tecla ya hacía otra cosa (la configuraste tú): no la pisamos.
-      echo "  - $key ya tenía otra acción asignada; la dejo como estaba"
-      return
+# --- Limpieza de una version anterior -----------------------------------------
+# Una version anterior asignaba las teclas multimedia a YT Music, y eso le
+# quitaba el control al navegador y a otros reproductores. Si las tienes asi,
+# las liberamos. Solo se quitan las que puso este instalador.
+remove_old_keys() {
+  command -v xfconf-query >/dev/null || return 0
+  local key prop current
+  for key in XF86AudioPlay XF86AudioPause XF86AudioStop XF86AudioNext \
+             XF86AudioPrev XF86AudioForward XF86AudioRewind; do
+    prop="/commands/custom/$key"
+    current="$(xfconf-query -c xfce4-keyboard-shortcuts -p "$prop" 2>/dev/null || true)"
+    if [[ "$current" == *org.mpris.MediaPlayer2.ytmpanel* ]]; then
+      xfconf-query -c xfce4-keyboard-shortcuts -p "$prop" -r || true
+      echo "  - $key liberada: vuelve a funcionar como antes"
     fi
-    xfconf-query -c "$KEYS_CHANNEL" -p "$prop" -s "$cmd" || return 0
-  else
-    xfconf-query -c "$KEYS_CHANNEL" -p "$prop" -n -t string -s "$cmd" || {
-      echo "  - no pude asignar $key"
-      return 0
-    }
-  fi
-  echo "  - $key  ->  $method"
+  done
 }
 
 stop_running() {        # cierra el popup y mpv si estaban abiertos
@@ -83,6 +72,7 @@ fi
 # 3. Copiar todo a su lugar definitivo
 # ============================================================================
 stop_running
+remove_old_keys
 LIBDIR="$(pkg-config --variable=libdir "$PKG")"
 sudo install -Dm755 "$BUILD/libytmplugin.so" "$LIBDIR/xfce4/panel/plugins/libytmplugin.so"
 sudo install -Dm644 "$BUILD/ytmplugin.desktop" "$DESKTOP_DIR/ytmplugin.desktop"
@@ -90,24 +80,7 @@ install -Dm755 ytm_panel.py "$APP_DIR/ytm_panel.py"
 install -Dm755 uninstall.sh "$APP_DIR/uninstall.sh"   # para poder desinstalar luego
 
 # ============================================================================
-# 4. Conectar las teclas multimedia del teclado
-# ============================================================================
-echo
-echo "Teclas multimedia:"
-if command -v xfconf-query >/dev/null && command -v dbus-send >/dev/null; then
-  bind_key XF86AudioPlay    PlayPause
-  bind_key XF86AudioPause   Pause
-  bind_key XF86AudioStop    Stop
-  bind_key XF86AudioNext    Next
-  bind_key XF86AudioPrev    Previous
-  bind_key XF86AudioForward Seek int64:10000000      # +10 segundos
-  bind_key XF86AudioRewind  Seek int64:-10000000     # -10 segundos
-else
-  echo "  - no encontré xfconf-query o dbus-send; sin teclas multimedia"
-fi
-
-# ============================================================================
-# 5. Avisos si falta algo para que funcione
+# 4. Avisos si falta algo para que funcione
 # ============================================================================
 echo
 for cmd in mpv yt-dlp; do
@@ -119,14 +92,14 @@ python3 -c "import ytmusicapi" 2>/dev/null ||
   echo "AVISO: falta ytmusicapi  ->  pip install --user --break-system-packages ytmusicapi"
 
 # ============================================================================
-# 6. Recargar el panel
+# 5. Recargar el panel
 # ============================================================================
 xfce4-panel -r
 echo
 echo "Listo. Ahora: clic derecho en el panel -> Panel -> Añadir nuevos elementos -> YT Music"
 
 # ============================================================================
-# 7. Borrar los archivos de instalación (ya están instalados, no hacen falta)
+# 6. Borrar los archivos de instalación (ya están instalados, no hacen falta)
 # ============================================================================
 if [[ $KEEP -eq 1 ]]; then
   echo "Dejé los archivos en: $SRC_DIR"

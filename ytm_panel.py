@@ -7,8 +7,6 @@ YT Music Panel - el popup del reproductor
     debe aparecer el popup
   - Este archivo dibuja la ventana, busca canciones en YouTube Music y le
     pasa el audio a mpv
-  - Se anuncia en el sistema como un "reproductor de musica" (MPRIS),
-    pudiendo controlar con las teclas multimedia del teclado
 
 Solo hay una copia corriendo a la vez, la musica sigue sonando aunque lo ocultes
 
@@ -51,13 +49,6 @@ COVER_SIZE = 96      # tamaño de la portada, en pixeles
 LIST_H = 250         # alto de la lista de resultados
 MAX_RESULTS = 25     # cuantas canciones pedir en cada busqueda
 REOPEN_GUARD = 0.6   # segundos; se explica en App.do_command_line
-
-# Nombre con el que nos anunciamos al sistema como reproductor (MPRIS)
-
-MPRIS_NAME = "org.mpris.MediaPlayer2.ytmpanel"
-MPRIS_PATH = "/org/mpris/MediaPlayer2"
-MPRIS_ROOT = "org.mpris.MediaPlayer2"
-MPRIS_PLAYER = "org.mpris.MediaPlayer2.Player"
 
 
 def fmt_time(seconds):
@@ -167,174 +158,6 @@ class Mpv:
             pass
 
 
-# ============================================================
-# MPRIS: presentarnos al sistema como "reproductor de musica"
-# ============================================================
-
-MPRIS_XML = """
-<node>
-  <interface name="org.mpris.MediaPlayer2">
-    <method name="Raise"/>
-    <method name="Quit"/>
-    <property name="CanQuit" type="b" access="read"/>
-    <property name="CanRaise" type="b" access="read"/>
-    <property name="HasTrackList" type="b" access="read"/>
-    <property name="Identity" type="s" access="read"/>
-    <property name="SupportedUriSchemes" type="as" access="read"/>
-    <property name="SupportedMimeTypes" type="as" access="read"/>
-  </interface>
-  <interface name="org.mpris.MediaPlayer2.Player">
-    <method name="Next"/>
-    <method name="Previous"/>
-    <method name="Pause"/>
-    <method name="PlayPause"/>
-    <method name="Stop"/>
-    <method name="Play"/>
-    <method name="Seek"><arg direction="in" name="Offset" type="x"/></method>
-    <method name="SetPosition">
-      <arg direction="in" name="TrackId" type="o"/>
-      <arg direction="in" name="Position" type="x"/>
-    </method>
-    <method name="OpenUri"><arg direction="in" name="Uri" type="s"/></method>
-    <property name="PlaybackStatus" type="s" access="read"/>
-    <property name="Rate" type="d" access="read"/>
-    <property name="MinimumRate" type="d" access="read"/>
-    <property name="MaximumRate" type="d" access="read"/>
-    <property name="Volume" type="d" access="read"/>
-    <property name="Metadata" type="a{sv}" access="read"/>
-    <property name="Position" type="x" access="read"/>
-    <property name="CanGoNext" type="b" access="read"/>
-    <property name="CanGoPrevious" type="b" access="read"/>
-    <property name="CanPlay" type="b" access="read"/>
-    <property name="CanPause" type="b" access="read"/>
-    <property name="CanSeek" type="b" access="read"/>
-    <property name="CanControl" type="b" access="read"/>
-  </interface>
-</node>
-"""
-
-
-class Mpris:
-    """Se registra en D-Bus y traduce las ordenes del sistema a acciones del popup"""
-
-    def __init__(self, win):
-        self.win = win
-        self.conn = None
-        self.sent = {}      
-        self.node = Gio.DBusNodeInfo.new_for_xml(MPRIS_XML)
-        self.owner_id = Gio.bus_own_name(
-            Gio.BusType.SESSION, MPRIS_NAME, Gio.BusNameOwnerFlags.NONE,
-            self._on_bus_acquired, None, None)
-
-    def close(self):
-        Gio.bus_unown_name(self.owner_id)
-
-    def _on_bus_acquired(self, conn, _name):
-        """Ya tenemos conexión a D-Bus: publicamos las dos "interfaces" MPRIS."""
-        self.conn = conn
-        for iface in self.node.interfaces:
-            conn.register_object(MPRIS_PATH, iface, self._on_method_call,
-                                 self._on_get_property, None)
-
-    # ----- Ordenes que llegan (teclas multimedia, playerctl, etc.) -----------
-    def _on_method_call(self, _conn, _sender, _path, iface, method, params, invocation):
-        w = self.win
-        args = params.unpack()
-
-        if iface == MPRIS_PLAYER:
-            if method == "PlayPause":
-                w.media_toggle()
-            elif method == "Play":
-                w.media_play()
-            elif method == "Pause":
-                w.media_pause()
-            elif method == "Next":
-                w.media_next()
-            elif method == "Previous":
-                w.media_prev()
-            elif method == "Stop":
-                w.media_stop()
-            elif method == "Seek":             
-                w.media_seek(args[0] / 1_000_000)
-            elif method == "SetPosition":
-                w.media_seek_to(args[1] / 1_000_000)
-        elif iface == MPRIS_ROOT and method == "Quit":
-            w.app.quit_all()
-
-        invocation.return_value(None)           
-
-    # ----- Preguntas del sistema ----
-    def _on_get_property(self, _conn, _sender, _path, iface, name):
-        if iface == MPRIS_ROOT:
-            props = {
-                "CanQuit": GLib.Variant("b", True),
-                "CanRaise": GLib.Variant("b", False),
-                "HasTrackList": GLib.Variant("b", False),
-                "Identity": GLib.Variant("s", "YT Music"),
-                "SupportedUriSchemes": GLib.Variant("as", []),
-                "SupportedMimeTypes": GLib.Variant("as", []),
-            }
-        else:
-            props = self._player_props()
-        return props.get(name)
-
-    def _player_props(self):
-        yes = GLib.Variant("b", True)
-        return {
-            "PlaybackStatus": GLib.Variant("s", self._status()),
-            "Rate": GLib.Variant("d", 1.0),
-            "MinimumRate": GLib.Variant("d", 1.0),
-            "MaximumRate": GLib.Variant("d", 1.0),
-            "Volume": GLib.Variant("d", 1.0),
-            "Metadata": GLib.Variant("a{sv}", self._metadata()),
-            "Position": GLib.Variant("x", int(self.win.position * 1_000_000)),
-            "CanGoNext": yes, "CanGoPrevious": yes, "CanPlay": yes,
-            "CanPause": yes, "CanSeek": yes, "CanControl": yes,
-        }
-
-    def _status(self):
-        w = self.win
-        if w.pos < 0:
-            return "Stopped"
-        return "Paused" if w.paused else "Playing"
-
-    def _metadata(self):
-        """Datos de la canción actual: título, artista, duración, portada."""
-        w = self.win
-        if not 0 <= w.pos < len(w.queue):
-            return {"mpris:trackid": GLib.Variant(
-                "o", "/org/mpris/MediaPlayer2/TrackList/NoTrack")}
-        it = w.queue[w.pos]
-        # El identificador de la pista solo admite letras, numeros y "_"
-        safe_id = re.sub(r"\W", "_", it["id"])
-        md = {
-            "mpris:trackid": GLib.Variant("o", f"/org/ytmpanel/track/{safe_id}"),
-            "mpris:length": GLib.Variant("x", int(w.duration * 1_000_000)),
-            "xesam:title": GLib.Variant("s", it["title"]),
-            "xesam:artist": GLib.Variant("as", [it["artist"]] if it["artist"] else []),
-        }
-        if it["cover"]:
-            md["mpris:artUrl"] = GLib.Variant("s", it["cover"])
-        return md
-
-    # ----- Avisar al sistema cuando algo cambia -----
-    def refresh(self):
-        if not self.conn:
-            return
-        props = self._player_props()
-        changed = {}
-        for key in ("PlaybackStatus", "Metadata"):
-            text = props[key].print_(False)
-            if self.sent.get(key) != text:
-                self.sent[key] = text
-                changed[key] = props[key]
-        if changed:
-            self.conn.emit_signal(
-                None, MPRIS_PATH, "org.freedesktop.DBus.Properties",
-                "PropertiesChanged",
-                GLib.Variant("(sa{sv}as)", (MPRIS_PLAYER, changed, [])))
-
-
 # ============================================================================
 # Ventana del popup
 # ============================================================================
@@ -343,6 +166,7 @@ class PlayerWindow(Gtk.Window):
         super().__init__(title="YT Music")
         self.app = app
 
+        # Que se vea como popup: sin bordes, sin barra de titulo, sin aparecer
         # en la barra de tareas y siempre por encima
         self.set_size_request(WIN_W, -1)
         self.set_type_hint(Gdk.WindowTypeHint.UTILITY)
@@ -363,9 +187,7 @@ class PlayerWindow(Gtk.Window):
         # --- Cosas que recordamos sobre la música ---
         self.queue = []             # Canciones de la ultima busqueda
         self.pos = -1               # Cual suena ahora (-1 = ninguna)
-        self.paused = True
         self.duration = 0.0         # duracion de la cancion actual, en segundos
-        self.position = 0           # segundo por el que va
         self.dragging = False       # ¿Se esta arrastrando la barra de tiempo?
         self.seek_target = None
         self._last_sec = -1         # Refrescar la barra solo una vez por segundo
@@ -375,7 +197,6 @@ class PlayerWindow(Gtk.Window):
 
         self.ytm = YTMusic() if YTMusic else None
         self.mpv = None
-        self.mpris = None
         self._build_ui()
 
         if not self.ytm:
@@ -384,10 +205,6 @@ class PlayerWindow(Gtk.Window):
             self.mpv = Mpv(self._on_mpv_prop)
         except RuntimeError as e:
             self.set_status(f"Error: {e}")
-        try:
-            self.mpris = Mpris(self)
-        except Exception:
-            pass    # sin D-Bus todo funciona igual, solo sin teclas multimedia
 
     # -------------------
     # Armar la interfaz
@@ -489,11 +306,11 @@ class PlayerWindow(Gtk.Window):
             return b
 
         b_prev = icon_button("media-skip-backward-symbolic", "Anterior",
-                             lambda *_: self.media_prev())
+                             lambda *_: self._mpv("playlist-prev"))
         self.b_play = icon_button("media-playback-start-symbolic",
-                                  "Reproducir / Pausa", lambda *_: self.media_toggle())
+                                  "Reproducir / Pausa", lambda *_: self._toggle_play())
         b_next = icon_button("media-skip-forward-symbolic", "Siguiente",
-                             lambda *_: self.media_next())
+                             lambda *_: self._mpv("playlist-next"))
 
         # "Repetir" queda hundido mientras este activo
         b_loop = Gtk.ToggleButton()
@@ -673,7 +490,7 @@ class PlayerWindow(Gtk.Window):
         return False
 
     # ------------------------------------------------------------------
-    # Reproducir y controlar (botones, teclas multimedia, MPRIS)
+    # Reproducir y controlar
     # ------------------------------------------------------------------
 
     def _mpv(self, *args):
@@ -696,35 +513,13 @@ class PlayerWindow(Gtk.Window):
         self.list_sw.hide()         # vista compacta: busqueda + reproductor
         self._relayout()
 
-    def media_toggle(self):
+    def _toggle_play(self):
         if self.pos < 0 and self.queue:
             self.play_index(0)      # no suena nada: empezamos por la primera
         else:
             self._mpv("cycle", "pause")
 
-    def media_play(self):
-        if self.pos < 0 and self.queue:
-            self.play_index(0)
-        else:
-            self._mpv("set_property", "pause", False)
-
-    def media_pause(self):
-        self._mpv("set_property", "pause", True)
-
-    def media_next(self):
-        self._mpv("playlist-next")
-
-    def media_prev(self):
-        self._mpv("playlist-prev")
-
-    def media_stop(self):
-        self._mpv("stop")
-
-    def media_seek(self, seconds):
-        """Adelanta (o retrocede, si es negativo) esa cantidad de segundos."""
-        self._mpv("seek", seconds, "relative")
-
-    def media_seek_to(self, seconds):
+    def _seek_to(self, seconds):
         self._mpv("seek", seconds, "absolute")
 
     # -----------------
@@ -741,12 +536,12 @@ class PlayerWindow(Gtk.Window):
         if self.dragging:
             self.seek_target = value                    # se aplica al soltar
         else:
-            self.media_seek_to(value)                   # con las flechas del teclado
+            self._seek_to(value)                         # con las flechas del teclado
         return False
 
     def _on_seek_release(self, *_):
         if self.seek_target is not None:
-            self.media_seek_to(self.seek_target)
+            self._seek_to(self.seek_target)
             self.seek_target = None
         self.dragging = False
         return False
@@ -759,7 +554,6 @@ class PlayerWindow(Gtk.Window):
     def _reset_progress(self):
         """Pone la barra de tiempo en cero (al cambiar de cancion)."""
         self._last_sec = -1
-        self.position = 0
         self._set_duration(0)
         self.scale.set_value(0)
         self.lbl_elapsed.set_text("0:00")
@@ -826,8 +620,7 @@ class PlayerWindow(Gtk.Window):
             self._relayout()
 
         elif name == "pause":                   # pausa / reanudar
-            self.paused = bool(data)
-            icon = ("media-playback-start-symbolic" if self.paused
+            icon = ("media-playback-start-symbolic" if data
                     else "media-playback-pause-symbolic")
             self.b_play.set_image(
                 Gtk.Image.new_from_icon_name(icon, Gtk.IconSize.BUTTON))
@@ -839,13 +632,8 @@ class PlayerWindow(Gtk.Window):
             sec = int(data or 0)
             if sec != self._last_sec:
                 self._last_sec = sec
-                self.position = sec
                 self.scale.set_value(sec)
                 self.lbl_elapsed.set_text(fmt_time(sec))
-
-        # Avisamos al sistema (teclas multimedia, etc.) de lo que cambio
-        if name in ("playlist-pos", "pause", "duration") and self.mpris:
-            self.mpris.refresh()
         return False
 
 
@@ -902,12 +690,9 @@ class App(Gtk.Application):
         return False
 
     def quit_all(self):
-        """Apaga todo: la musica, el aviso al sistema y el programa."""
-        if self.win:
-            if self.win.mpv:
-                self.win.mpv.quit()
-            if self.win.mpris:
-                self.win.mpris.close()
+        """Apaga todo: la musica y el programa."""
+        if self.win and self.win.mpv:
+            self.win.mpv.quit()
         self.release()
         self.quit()
 
