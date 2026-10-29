@@ -88,7 +88,7 @@ Quita el plugin y el popup.
  │ (C, ytm-plugin.c)  │                  │ (Python + GTK3)     │ ◄───────────── │      │
  └────────────────────┘                  └─────────────────────┘    eventos     └──────┘
    botón + posición                         interfaz, búsqueda        reproduce el audio
-                 )                          (ytmusicapi), portadas    (vía yt-dlp)
+                                            (ytmusicapi), portadas    (vía yt-dlp)
 ```
 
 - **`plugin/ytm-plugin.c`**: el elemento del panel. Es solo un botón. Al hacer clic pide al panel (`xfce_panel_plugin_position_widget`, la misma función del reloj) dónde debe ir el popup y lanza el script con esa posición.
